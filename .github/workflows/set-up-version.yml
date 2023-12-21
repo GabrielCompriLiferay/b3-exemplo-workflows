@@ -1,0 +1,182 @@
+name: Set Up Version
+permissions: write-all  
+on:
+  workflow_call:
+    inputs:
+      BRANCH_PRD:
+        type: string
+        required: true
+      BRANCH_HOMOLOGATION:
+        type: string
+        required: true
+      BRANCH_DEVELOP:
+        type: string
+        required: true
+      REPOSITORY_OWNER:
+        type: string
+        required: true
+      REPOSITORY_NAME:
+        type: string
+        required: true
+    secrets:
+      GH_TOKEN:
+        required: true
+    outputs:
+      moduleFullVersion:
+        description: "The first output string"
+        value: ${{ jobs.create-module-tag.outputs.moduleFullVersion }}
+      moduleOnlyVersion:
+        description: "The second output string"
+        value: ${{ jobs.create-module-tag.outputs.moduleOnlyVersion }}
+      moduleSuffix:
+        description: "The third output string"
+        value: ${{ jobs.create-module-tag.outputs.moduleSuffix }}
+env:
+  SUFFIX_BRANCH_DEVELOP: "-SNAPSHOT"
+  SUFFIX_BRANCH_HOMOLOGATION: "-RC"
+  
+  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+  BRANCH_PRD: ${{ inputs.BRANCH_PRD }}
+  BRANCH_HOMOLOGATION: ${{ inputs.BRANCH_HOMOLOGATION }}
+  BRANCH_DEVELOP: ${{ inputs.BRANCH_DEVELOP }}
+  
+  REPOSITORY_OWNER: ${{ inputs.REPOSITORY_OWNER }}
+  REPOSITORY_NAME: ${{ inputs.REPOSITORY_NAME }}
+  
+  FULL_NAME_REPOSITORY: "${{ inputs.REPOSITORY_OWNER }}/${{ inputs.REPOSITORY_NAME }}"
+  
+jobs:
+  create-module-tag:
+    runs-on: ubuntu-22.04
+    outputs:      
+      moduleFullVersion: ${{ steps.moduleFullVersion.outputs.moduleFullVersion }}
+      moduleOnlyVersion: ${{ steps.moduleOnlyVersion.outputs.moduleOnlyVersion }}
+      moduleSuffix: ${{ steps.moduleSuffix.outputs.moduleSuffix }}
+    steps: 
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v3.10.0
+        with:
+          java-version: '8'
+          distribution: zulu
+    
+      - name: Clone Module ${{ env.REPOSITORY_NAME }}
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ env.FULL_NAME_REPOSITORY }}
+          path: liferay-workspace/modules/${{ env.REPOSITORY_NAME }}
+          token: ${{ secrets.GH_TOKEN }}
+          
+      - name: With Don`t have Release Tag Then Create First One
+        id: firstRelease
+        working-directory: liferay-workspace/modules/${{ env.REPOSITORY_NAME }}
+        run: |  
+          firstTag="$(jq -r 'map(select(.name | test("RC") | not)) | first | .name // empty' <<< $(gh api repos/$FULL_NAME_REPOSITORY/tags))"
+          if [ -z "$firstTag" ]
+          then
+            echo "Tag not Found, Create First"
+            echo "firstRelease=1.0.0" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Get GitHub latest release version
+        id: latestReleaseVersion
+        working-directory: liferay-workspace/modules/${{ env.REPOSITORY_NAME }}
+        run: |
+          LASTEST_VERSION="$(jq -r 'map(select(.name | test("RC") | not)) | first | .name // empty' <<< $(gh api repos/$FULL_NAME_REPOSITORY/tags))"
+          echo "latestReleaseVersion: $LASTEST_VERSION"
+          echo "latestReleaseVersion=$LASTEST_VERSION" >> $GITHUB_OUTPUT
+          
+      - name: Set Up Module Only Version
+        env:
+          LASTEST_RELEASE_VERSION: ${{ steps.latestReleaseVersion.outputs.latestReleaseVersion }}
+          FIRST_RELEASE: ${{ steps.firstRelease.outputs.firstRelease }}
+        id: moduleOnlyVersion
+        working-directory: liferay-workspace/modules/${{ env.REPOSITORY_NAME }}
+        run: |  
+          if [ ! -z "$FIRST_RELEASE" ]; then
+            echo "firstRelease value: $FIRST_RELEASE"
+            echo "moduleOnlyVersion=$FIRST_RELEASE" >> $GITHUB_OUTPUT
+            
+            exit 0 
+          fi
+                    
+          IFS=. read -r major minor patch <<< $LASTEST_RELEASE_VERSION          
+          patch=$(expr $patch + 1)
+          
+          echo "version: $major.$minor.$patch"
+          echo "moduleOnlyVersion=$major.$minor.$patch" >> $GITHUB_OUTPUT
+          
+      - name: Set Suffix by Branch
+        id: moduleSuffix
+        env:
+          MODULE_ONLY_VERSION: ${{ steps.moduleOnlyVersion.outputs.moduleOnlyVersion }}
+        working-directory: liferay-workspace/modules/${{ env.REPOSITORY_NAME }}
+        run: |          
+          case "${{ github.ref_name }}" in
+          
+            $BRANCH_DEVELOP)
+              echo "moduleSuffix=$SUFFIX_BRANCH_DEVELOP" >> $GITHUB_OUTPUT
+              ;;
+              
+            $BRANCH_HOMOLOGATION)
+            
+              lastPreRelease="$(jq -r --arg MODULE_ONLY_VERSION "$MODULE_ONLY_VERSION-RC" 'map(select(.name | test($MODULE_ONLY_VERSION))) | first | .name // empty' <<< $(gh api repos/$FULL_NAME_REPOSITORY/tags))"
+                
+              echo "lastPreRelease: $lastPreRelease"
+              
+              if [[ -z "$lastPreRelease" ]]
+              then
+                echo "create tag rc"
+                echo "moduleSuffix=$SUFFIX_BRANCH_HOMOLOGATION-1" >> $GITHUB_OUTPUT
+              else
+                echo "increment rc value"
+                
+                IFS=- read -r version suffix sufNumber <<< $lastPreRelease
+                sufNumber=$(expr $sufNumber + 1)
+                
+                echo "moduleSuffix=-$suffix-$sufNumber" >> $GITHUB_OUTPUT
+              fi    
+              ;;
+              
+            $BRANCH_PRD)
+              echo "moduleSuffix=" >> $GITHUB_OUTPUT
+              ;;
+              
+            *)
+              exit 1
+              ;;
+              
+          esac
+          
+      - name: Set Up Publish Version (FullVersion)
+        id: moduleFullVersion
+        env:
+          MODULE_ONLY_VERSION: ${{ steps.moduleOnlyVersion.outputs.moduleOnlyVersion }}
+          MODULE_SUFFIX: ${{ steps.moduleSuffix.outputs.moduleSuffix }}
+        working-directory: liferay-workspace/modules/${{ env.REPOSITORY_NAME }}
+        run: |                    
+          echo "moduleFullVersion=$MODULE_ONLY_VERSION$MODULE_SUFFIX" >> $GITHUB_OUTPUT
+          
+      - name: Set Up Github Tag
+        env:
+          MODULE_FULL_VERSION: ${{ steps.moduleFullVersion.outputs.moduleFullVersion }}
+        working-directory: liferay-workspace/modules/${{ env.REPOSITORY_NAME }}
+        run: |     
+          if [[ "${{ github.ref_name }}" == $BRANCH_DEVELOP ]]; then
+            echo "branch develop exiting"
+            exit 0
+          fi  
+          git tag $MODULE_FULL_VERSION
+          git push origin --tags
+          echo "Tag: $MODULE_FULL_VERSION Created"
+          
+      - name: Show output Values
+        env:
+          MODULE_ONLY_VERSION: ${{ steps.moduleOnlyVersion.outputs.moduleOnlyVersion }}
+          MODULE_FULL_VERSION: ${{ steps.moduleFullVersion.outputs.moduleFullVersion }}
+          MODULE_SUFFIX: ${{ steps.moduleSuffix.outputs.moduleSuffix }}
+        run: |
+          echo "moduleFullVersion: $MODULE_FULL_VERSION"
+          echo "MODULE_ONLY_VERSION: $MODULE_ONLY_VERSION"
+          echo "MODULE_SUFFIX: $MODULE_SUFFIX"
