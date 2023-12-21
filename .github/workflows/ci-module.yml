@@ -21,7 +21,7 @@ env:
   
   WORKSPACE_OWNER_REPOSITORY: "GabrielCompriLiferay" 
   WORKSPACE_REPOSITORY: "GabrielCompriLiferay"
-  WORKSPACE_REPOSITORY_BRANCH: "dev"
+  WORKSPACE_REPOSITORY_BRANCH: "main"
 
   
 jobs: 
