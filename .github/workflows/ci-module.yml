@@ -1,0 +1,118 @@
+name: CI Module
+
+on:
+  workflow_call:
+    secrets:
+      USERNAME:
+        required: true
+      TOKEN:
+        required: true
+
+permissions: write-all  
+
+env:
+  GH_TOKEN: ${{ secrets.TOKEN }}
+  BRANCH_PRD: "main"
+  BRANCH_HOMOLOGATION: "uat"
+  BRANCH_DEVELOP: "dev"
+  
+  MODULE_REPOSITORY_OWNER: "GabrielCompriLiferay" 
+  MODULE_REPOSITORY_NAME: ${{ github.event.repository.name }}
+  
+  WORKSPACE_OWNER_REPOSITORY: "GabrielCompriLiferay" 
+  WORKSPACE_REPOSITORY: "GabrielCompriLiferay"
+  WORKSPACE_REPOSITORY_BRANCH: "dev"
+
+  
+jobs: 
+  
+  set-up-environment:
+    runs-on: ubuntu-22.04
+    outputs:
+      BRANCH_PRD: ${{ steps.output.outputs.BRANCH_PRD }}
+      BRANCH_HOMOLOGATION: ${{ steps.output.outputs.BRANCH_HOMOLOGATION }}
+      BRANCH_DEVELOP: ${{ steps.output.outputs.BRANCH_DEVELOP }}
+  
+      MODULE_REPOSITORY_OWNER: ${{ steps.output.outputs.MODULE_REPOSITORY_OWNER }}
+      MODULE_REPOSITORY_NAME: ${{ steps.output.outputs.MODULE_REPOSITORY_NAME }}
+
+      WORKSPACE_OWNER_REPOSITORY: ${{ steps.output.outputs.WORKSPACE_OWNER_REPOSITORY }}
+      WORKSPACE_REPOSITORY: ${{ steps.output.outputs.WORKSPACE_REPOSITORY }}
+      WORKSPACE_REPOSITORY_BRANCH: ${{ steps.output.outputs.WORKSPACE_REPOSITORY_BRANCH }}
+
+    steps:
+      - name: Set Up Output
+        id: output
+        run: |
+          echo "BRANCH_PRD=$BRANCH_PRD" >> "$GITHUB_OUTPUT"
+          echo "BRANCH_HOMOLOGATION=$BRANCH_HOMOLOGATION" >> "$GITHUB_OUTPUT"
+          echo "BRANCH_DEVELOP=$BRANCH_DEVELOP" >> "$GITHUB_OUTPUT"
+          
+          echo "MODULE_REPOSITORY_OWNER=$MODULE_REPOSITORY_OWNER" >> "$GITHUB_OUTPUT"
+          echo "MODULE_REPOSITORY_NAME=$MODULE_REPOSITORY_NAME" >> "$GITHUB_OUTPUT"
+          
+          echo "WORKSPACE_OWNER_REPOSITORY=$WORKSPACE_OWNER_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "WORKSPACE_REPOSITORY=$WORKSPACE_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "WORKSPACE_REPOSITORY_BRANCH=$WORKSPACE_REPOSITORY_BRANCH" >> "$GITHUB_OUTPUT"
+          
+  set-up-module-version:
+    needs: set-up-environment
+    uses: ./.github/workflows/set-up-version.yml
+    with:
+      BRANCH_PRD: ${{ needs.set-up-environment.outputs.BRANCH_PRD }}
+      BRANCH_HOMOLOGATION: ${{ needs.set-up-environment.outputs.BRANCH_HOMOLOGATION }}
+      BRANCH_DEVELOP: ${{ needs.set-up-environment.outputs.BRANCH_DEVELOP }}
+
+      REPOSITORY_OWNER: ${{ needs.set-up-environment.outputs.MODULE_REPOSITORY_OWNER }}
+      REPOSITORY_NAME: ${{ needs.set-up-environment.outputs.MODULE_REPOSITORY_NAME }}
+    secrets:
+      GH_TOKEN: ${{ secrets.TOKEN }}
+
+  build-and-publish:
+    needs: [ set-up-environment, set-up-module-version ]
+    uses: ./.github/workflows/build-and-publish.yml
+    secrets: 
+      USER: ${{ secrets.USERNAME }}
+      TOKEN: ${{ secrets.TOKEN }}
+    with:
+      WORKSPACE_OWNER_REPOSITORY: ${{ needs.set-up-environment.outputs.WORKSPACE_OWNER_REPOSITORY }}
+      WORKSPACE_REPOSITORY: ${{ needs.set-up-environment.outputs.WORKSPACE_REPOSITORY }}
+      WORKSPACE_REPOSITORY_BRANCH: ${{ needs.set-up-environment.outputs.WORKSPACE_REPOSITORY_BRANCH }}
+      
+      BRANCH_PRD: ${{ needs.set-up-environment.outputs.BRANCH_PRD }}
+      BRANCH_HOMOLOGATION: ${{ needs.set-up-environment.outputs.BRANCH_HOMOLOGATION }}
+      BRANCH_DEVELOP: ${{ needs.set-up-environment.outputs.BRANCH_DEVELOP }}
+
+      MODULE_FULL_VERSION: ${{ needs.set-up-module-version.outputs.moduleFullVersion }}
+      MODULE_ONLY_VERSION: ${{ needs.set-up-module-version.outputs.moduleOnlyVersion }}
+      MODULE_SUFFIX: ${{ needs.set-up-module-version.outputs.moduleSuffix }}
+
+  create-tag-release:
+    needs: [ set-up-environment, set-up-module-version, build-and-publish ]
+    runs-on: ubuntu-22.04
+    env:
+      MODULE_FULL_VERSION: ${{ needs.set-up-module-version.outputs.moduleFullVersion }}
+
+      BRANCH_PRD: ${{ needs.set-up-environment.outputs.BRANCH_PRD }}
+      BRANCH_HOMOLOGATION: ${{ needs.set-up-environment.outputs.BRANCH_HOMOLOGATION }}
+      BRANCH_DEVELOP: ${{ needs.set-up-environment.outputs.BRANCH_DEVELOP }}
+    steps: 
+
+      - name: Clone Module ${{ github.event.repository.name }}
+        uses: actions/checkout@v3
+        with:
+          path: liferay-workspace/modules/${{ env.MODULE_REPOSITORY_NAME }}
+
+      - name: Create New Pre-Release or Release By Branch           
+        working-directory: liferay-workspace/modules/${{ env.MODULE_REPOSITORY_NAME }}
+        run: |
+          case "${{ github.ref_name }}" in
+            $BRANCH_PRD)
+              git fetch
+              gh release create $MODULE_FULL_VERSION
+              ;;
+            $BRANCH_HOMOLOGATION)              
+              git fetch
+              gh release create $MODULE_FULL_VERSION --prerelease
+              ;;
+          esac
