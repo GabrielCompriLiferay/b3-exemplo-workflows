@@ -1,0 +1,144 @@
+name: CI Theme
+
+on:
+  workflow_call:
+    secrets:
+      USERNAME:
+        required: true
+      TOKEN:
+        required: true
+
+permissions: write-all  
+
+env:
+  GH_TOKEN: ${{ secrets.TOKEN }}
+  
+  ENVIRONMENT_BRANCH_PRD: prd
+  ENVIRONMENT_BRANCH_HOMOLOGATION: uat
+  ENVIRONMENT_BRANCH_DEVELOP: local dev
+  
+  BRANCH_PRD: "main"
+  BRANCH_HOMOLOGATION: "uat"
+  BRANCH_DEVELOP: "dev"
+  
+  MODULE_REPOSITORY_OWNER: "GabrielCompriLiferay" 
+  MODULE_REPOSITORY_NAME: ${{ github.event.repository.name }}
+  
+  WORKSPACE_OWNER_REPOSITORY: "GabrielCompriLiferay" 
+  WORKSPACE_REPOSITORY: "b3-exemplo-cloud"
+  WORKSPACE_REPOSITORY_BRANCH: "main"
+
+jobs: 
+
+  build-theme:
+    runs-on: ubuntu-22.04
+    steps:  
+
+    - name: Setup Java JDK
+      uses: actions/setup-java@v3.10.0
+      with:
+        java-version: '8'
+        distribution: zulu
+  
+    - name: Clone workspace
+      uses: actions/checkout@v3
+      with:
+        repository: ${{ env.WORKSPACE_OWNER_REPOSITORY }}/${{ env.WORKSPACE_REPOSITORY }}
+        path: b3-exemplo-cloud
+        ref: ${{ env.WORKSPACE_REPOSITORY_BRANCH }}
+        token: ${{ secrets.TOKEN }}
+        
+    - name: Set up liferay workspace
+      run: |
+        mkdir -p liferay-workspace
+        cp -r b3-exemplo-cloud/liferay/* liferay-workspace
+        
+    - name: Clear modules and Themes
+      continue-on-error: true
+      run: |
+        rm -rf liferay-workspace/themes/*
+        rm -rf liferay-workspace/modules/*
+        
+    - name: Set platform Enviroment
+      id: platformBom
+      run: |
+        case "${{ github.ref_name }}" in
+          $BRANCH_PRD)
+            platformBom="platform-b3-boms"
+            ;;
+          $BRANCH_HOMOLOGATION)
+            platformBom="platform-b3-boms-uat"
+            ;;
+          $BRANCH_DEVELOP)
+            platformBom="platform-b3-boms-dev"
+            ;;
+          *)
+            exit 1
+            ;;
+        esac
+        
+        echo "platformBom=$platformBom" >> $GITHUB_OUTPUT
+        
+    - name: Clone Module ${{ github.event.repository.name }}
+      uses: actions/checkout@v3
+      with:
+        path: liferay-workspace/themes/${{ github.event.repository.name }}
+              
+    - name: Build module
+      env:
+        PLATFORM_BOM: ${{ steps.platformBom.outputs.platformBom }}
+      working-directory: liferay-workspace
+      run: ./gradlew deploy -Pklabin.platform.name=$PLATFORM_BOM
+      
+    - name: move binaries files to deploy
+      run: | 
+        environment=""
+        case "${{ github.ref_name }}" in
+          $BRANCH_PRD)
+            environment=$ENVIRONMENT_BRANCH_PRD
+            echo "environment: PRD"
+            ;;
+          $BRANCH_HOMOLOGATION)
+            environment=$ENVIRONMENT_BRANCH_HOMOLOGATION
+            echo "environment: HOMOLOGATION"
+            ;;
+          $BRANCH_DEVELOP)
+            environment=$ENVIRONMENT_BRANCH_DEVELOP
+            echo "environment: DEVELOP"
+            ;;
+          *)
+            exit 1
+            ;;
+        esac
+        
+        for folder in $environment
+        do
+          cp -v liferay-workspace/build/docker/deploy/* b3-exemplo-cloud/liferay/configs/$folder/deploy
+          echo "files moved to /$folder"
+        done
+        
+        
+    - name: update local repository
+      working-directory: b3-exemplo-cloud
+      run: |
+          git stash
+        
+    - name: update local repository
+      working-directory: b3-exemplo-cloud
+      run: |
+          git pull origin $WORKSPACE_REPOSITORY_BRANCH
+          
+    - name: update local repository
+      continue-on-error: true
+      working-directory: b3-exemplo-cloud
+      run: |
+          git stash pop
+          
+    - name: push to b3-exemplo-cloud
+      working-directory: b3-exemplo-cloud
+      run: |
+          git config user.name BotDeploy
+          git config user.email BotDeploy@github.com
+          git add .
+          git commit -m "Theme: ${{ github.event.repository.name }} deploy"
+          git push
