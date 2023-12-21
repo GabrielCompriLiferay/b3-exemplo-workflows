@@ -152,7 +152,7 @@ jobs:
               
     - name: Build module
       env:
-        PLATFORM_BOM: ${{ steps.platformBom.outputs.platformBom }}`
+        PLATFORM_BOM: ${{ steps.platformBom.outputs.platformBom }}
       working-directory: liferay-workspace
       run: ./gradlew deploy -x test -Pb3.platform.name=$PLATFORM_BOM -Pb3.platform.version=+
     
