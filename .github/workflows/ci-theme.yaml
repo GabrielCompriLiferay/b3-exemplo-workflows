@@ -88,7 +88,7 @@ jobs:
       env:
         PLATFORM_BOM: ${{ steps.platformBom.outputs.platformBom }}
       working-directory: liferay-workspace
-      run: ./gradlew deploy -Pklabin.platform.name=$PLATFORM_BOM
+      run: ./gradlew deploy -Pb3.platform.name=$PLATFORM_BOM
       
     - name: move binaries files to deploy
       run: | 
